@@ -70,3 +70,56 @@ func TestOpenAIProviderRejectsMissingUsageAndDoesNotLeakErrorBody(t *testing.T) 
 		})
 	}
 }
+
+func TestOpenAIProviderReadReceiptUsesDurableGatewayStatus(t *testing.T) {
+	const answer = `{"id":"gateway-456","model":"deepseek-flash","choices":[{"message":{"content":"已找到原回答"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":60,"prompt_cache_miss_tokens":40}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Errorf("receipt query lost method or authorization")
+		}
+		switch r.URL.Path {
+		case "/v1/rin/operations/done":
+			w.Header().Set("X-Rinspace-Operation-Status", "completed")
+			_, _ = w.Write([]byte(answer))
+		case "/v1/rin/operations/failed":
+			w.Header().Set("X-Rinspace-Operation-Status", "failed")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"private upstream failure"}`))
+		case "/v1/rin/operations/unknown":
+			w.Header().Set("X-Rinspace-Operation-Status", "unknown")
+			w.WriteHeader(http.StatusAccepted)
+		case "/v1/rin/operations/expired":
+			w.Header().Set("X-Rinspace-Operation-Status", "expired")
+			w.WriteHeader(http.StatusGone)
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`secret-transient-error`))
+		}
+	}))
+	defer server.Close()
+	provider := OpenAIProvider{Endpoint: server.URL + "/v1/chat/completions", APIKey: "test-key"}
+	for _, item := range []struct {
+		id     string
+		status ReceiptStatus
+	}{
+		{"done", ReceiptCompleted}, {"failed", ReceiptFailed},
+		{"unknown", ReceiptUnknown}, {"expired", ReceiptExpired},
+	} {
+		receipt, err := provider.ReadReceipt(context.Background(), item.id)
+		if err != nil || receipt.Status != item.status {
+			t.Fatalf("receipt %s: status=%s err=%v", item.id, receipt.Status, err)
+		}
+		if item.id == "done" && (receipt.Completion.RequestID != "gateway-456" || receipt.Completion.Usage.CacheMissTokens != 40) {
+			t.Fatalf("completed receipt lost answer or usage: %+v", receipt)
+		}
+		if item.id == "failed" && receipt.HTTPStatus != http.StatusServiceUnavailable {
+			t.Fatalf("stored failure lost original status: %+v", receipt)
+		}
+	}
+	for _, id := range []string{"unavailable", "bad/id"} {
+		_, err := provider.ReadReceipt(context.Background(), id)
+		if err == nil || strings.Contains(err.Error(), "secret-transient-error") {
+			t.Fatalf("untrusted receipt response accepted or leaked: %v", err)
+		}
+	}
+}
