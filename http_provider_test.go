@@ -14,7 +14,7 @@ func TestOpenAIProviderCarriesChatContractAndUsage(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		if r.Header.Get("Authorization") != "Bearer test-key" || r.Header.Get("X-Request-ID") != "op-123" {
+		if r.Header.Get("Authorization") != "Bearer test-key" || r.Header.Get("X-Rinspace-Operation-Key") != "op-123" {
 			t.Errorf("missing internal credentials or operation ID")
 		}
 		var request struct {
