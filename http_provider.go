@@ -59,7 +59,7 @@ func (p OpenAIProvider) Complete(ctx context.Context, input CompletionRequest) (
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	if id := strings.TrimSpace(input.OperationID); id != "" {
-		request.Header.Set("X-Request-ID", id)
+		request.Header.Set("X-Rinspace-Operation-Key", id)
 	}
 	client := p.Client
 	if client == nil {
