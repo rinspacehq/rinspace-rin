@@ -19,4 +19,4 @@ reply, err := client.Chat(ctx, rin.ChatInput{
 
 `Chat` does not retry a model request. A host that charges users must first reserve funds, then persist the returned usage and settle or recover the original operation ID. Never send the gateway token to a browser.
 
-License: MIT. The Rinspace product integration consumes a reviewed, immutable version of this module.
+License: AGPL-3.0-only, matching Rinspace Web. The Rinspace product integration consumes a reviewed, immutable version of this module.
