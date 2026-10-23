@@ -21,4 +21,6 @@ reply, err := client.Chat(ctx, rin.ChatInput{
 
 `OperationID` is sent as `X-Rinspace-Operation-Key`; the gateway must enforce one call per key and expose the original receipt for recovery.
 
+After a timeout, call `OpenAIProvider.ReadReceipt(ctx, operationID)`. It returns the original answer and usage for a completed operation, or a durable `failed`, `unknown`, or `expired` status. A response without the gateway's operation status header is an error; the host must keep that operation unresolved instead of issuing a second model call.
+
 License: AGPL-3.0-only, matching Rinspace Web. The Rinspace product integration consumes a reviewed, immutable version of this module.

@@ -56,6 +56,24 @@ type Completion struct {
 	Usage     Usage
 }
 
+type ReceiptStatus string
+
+const (
+	ReceiptUnknown   ReceiptStatus = "unknown"
+	ReceiptCompleted ReceiptStatus = "completed"
+	ReceiptFailed    ReceiptStatus = "failed"
+	ReceiptExpired   ReceiptStatus = "expired"
+)
+
+// OperationReceipt is the gateway's durable answer to a previous operation.
+// A failed receipt confirms that the original request failed; a transport or
+// protocol error leaves the operation unresolved and must not trigger a retry.
+type OperationReceipt struct {
+	Status     ReceiptStatus
+	Completion Completion
+	HTTPStatus int
+}
+
 type Provider interface {
 	Complete(context.Context, CompletionRequest) (Completion, error)
 }
