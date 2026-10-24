@@ -12,6 +12,10 @@ Set `RIN_SIDECAR_TOKEN` to a random secret of at least 32 characters, `RIN_GATEW
 
 The container is built from [Dockerfile](Dockerfile). Source for every published image remains available in this AGPL repository. The host must pin a reviewed image by digest and apply its own account and wallet checks before any `/v1/complete` call.
 
+## Go library
+
+Other AGPL consumers can import the package directly:
+
 ```go
 provider := rin.OpenAIProvider{
     Endpoint: "http://internal-gateway:3000/v1/chat/completions",
@@ -31,4 +35,4 @@ reply, err := client.Chat(ctx, rin.ChatInput{
 
 After a timeout, call `OpenAIProvider.ReadReceipt(ctx, operationID)`. It returns the original answer and usage for a completed operation, or a durable `failed`, `unknown`, or `expired` status. A response without the gateway's operation status header is an error; the host must keep that operation unresolved instead of issuing a second model call.
 
-License: AGPL-3.0-only, matching Rinspace Web. The Rinspace product integration consumes a reviewed, immutable version of this module.
+License: AGPL-3.0-only, matching Rinspace Web. Rinspace pins the reviewed sidecar image by OCI digest; its private account and wallet service does not import this Go package. Each published image and corresponding source are listed in this repository's releases.
