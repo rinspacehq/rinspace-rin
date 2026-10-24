@@ -8,6 +8,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /rin-sidecar ./cmd/rin-
 FROM alpine:3.22
 RUN addgroup -S rin && adduser -S -G rin rin
 COPY --from=build --chown=rin:rin /rin-sidecar /usr/local/bin/rin-sidecar
+COPY --chown=rin:rin LICENSE /usr/share/doc/rin/LICENSE
 USER rin
 EXPOSE 8098
 ENTRYPOINT ["/usr/local/bin/rin-sidecar"]
