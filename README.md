@@ -2,7 +2,15 @@
 
 Rin (琳) is the open chat core used by Rinspace. This Go module builds Rin's chat messages and calls an OpenAI-compatible model gateway through an injected provider. It returns answer text, model request ID, and token usage.
 
-The host supplies authentication, conversation history, page context, memory, retrieval, storage, wallet billing, rate limits, and provider credentials. This module contains no Rinspace user data or runtime secrets. The included `OpenAIProvider` can call a separately deployed new-api gateway; new-api is an independent AGPL-3.0 service and is not copied or linked into this module.
+The host supplies authentication, conversation history, page context, memory, retrieval, storage, wallet billing, and rate limits. This module contains no Rinspace user data or runtime secrets. The included `OpenAIProvider` can call a separately deployed new-api gateway; new-api is an independent AGPL-3.0 service and is not copied or linked into this module.
+
+## Separate service
+
+`cmd/rin-sidecar` runs this AGPL source as an independent HTTP process. The host sends a chat snapshot to `POST /v1/prepare`, persists the returned completion request before charging or calling the model, then sends the frozen request and its operation ID to `POST /v1/complete`. It uses `GET /v1/operations/{id}` to recover the original receipt and `POST /v1/operations/{id}/abort` to atomically terminate an operation that was never claimed. Recovery does not send a second model request.
+
+Set `RIN_SIDECAR_TOKEN` to a random secret of at least 32 characters, `RIN_GATEWAY_ENDPOINT` to the internal new-api `/v1/chat/completions` endpoint, and `RIN_GATEWAY_API_KEY` to a dedicated gateway token. Optional settings are `RIN_SIDECAR_ADDR` (default `:8098`) and `RIN_MAX_TOKENS` (default `1200`). All `/v1` routes require `Authorization: Bearer <RIN_SIDECAR_TOKEN>`. Bind this service only to a private network; never publish its port or tokens to a browser. `GET /health` reports process health.
+
+The container is built from [Dockerfile](Dockerfile). Source for every published image remains available in this AGPL repository. The host must pin a reviewed image by digest and apply its own account and wallet checks before any `/v1/complete` call.
 
 ```go
 provider := rin.OpenAIProvider{
