@@ -3,6 +3,7 @@ package rin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -120,6 +121,43 @@ func TestOpenAIProviderReadReceiptUsesDurableGatewayStatus(t *testing.T) {
 		_, err := provider.ReadReceipt(context.Background(), id)
 		if err == nil || strings.Contains(err.Error(), "secret-transient-error") {
 			t.Fatalf("untrusted receipt response accepted or leaked: %v", err)
+		}
+	}
+}
+
+func TestOpenAIProviderAbortsOnlyUnclaimedOperation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Errorf("receipt request lost authorization")
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/rin/operations/missing":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/rin/operations/missing/abort":
+			w.Header().Set("X-Rinspace-Operation-Status", "expired")
+			w.WriteHeader(http.StatusGone)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/rin/operations/claimed/abort":
+			w.Header().Set("X-Rinspace-Operation-Status", "unknown")
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer server.Close()
+	provider := OpenAIProvider{Endpoint: server.URL + "/v1/chat/completions", APIKey: "test-key"}
+	_, err := provider.ReadReceipt(context.Background(), "missing")
+	if !errors.Is(err, ErrReceiptNotFound) {
+		t.Fatalf("missing receipt should be distinguishable: %v", err)
+	}
+	for _, item := range []struct {
+		id   string
+		want ReceiptStatus
+	}{
+		{"missing", ReceiptExpired}, {"claimed", ReceiptUnknown},
+	} {
+		receipt, err := provider.AbortReceipt(context.Background(), item.id)
+		if err != nil || receipt.Status != item.want {
+			t.Fatalf("abort %s: receipt=%+v err=%v", item.id, receipt, err)
 		}
 	}
 }
