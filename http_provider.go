@@ -86,6 +86,21 @@ func (p OpenAIProvider) Complete(ctx context.Context, input CompletionRequest) (
 // ReadReceipt queries the original gateway call after a timeout. Only a
 // gateway status header is authoritative; a bare HTTP error is unresolved.
 func (p OpenAIProvider) ReadReceipt(ctx context.Context, operationID string) (OperationReceipt, error) {
+	return p.readReceipt(ctx, operationID, false)
+}
+
+// ErrReceiptNotFound means the gateway has not claimed the operation yet.
+// Call AbortReceipt before treating it as a failed call; a late POST may still
+// be in transit.
+var ErrReceiptNotFound = errors.New("rin operation has not been claimed")
+
+// AbortReceipt creates a terminal tombstone only when the original call has
+// not been claimed. Existing receipts are returned unchanged.
+func (p OpenAIProvider) AbortReceipt(ctx context.Context, operationID string) (OperationReceipt, error) {
+	return p.readReceipt(ctx, operationID, true)
+}
+
+func (p OpenAIProvider) readReceipt(ctx context.Context, operationID string, abort bool) (OperationReceipt, error) {
 	if !validOperationID(operationID) {
 		return OperationReceipt{}, errors.New("rin operation ID is invalid")
 	}
@@ -97,7 +112,12 @@ func (p OpenAIProvider) ReadReceipt(ctx context.Context, operationID string) (Op
 		return OperationReceipt{}, errors.New("rin provider key is missing")
 	}
 	endpoint.Path = "/v1/rin/operations/" + operationID
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	method := http.MethodGet
+	if abort {
+		method = http.MethodPost
+		endpoint.Path += "/abort"
+	}
+	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), nil)
 	if err != nil {
 		return OperationReceipt{}, err
 	}
@@ -112,6 +132,9 @@ func (p OpenAIProvider) ReadReceipt(ctx context.Context, operationID string) (Op
 		return OperationReceipt{}, err
 	}
 	defer response.Body.Close()
+	if !abort && response.StatusCode == http.StatusNotFound && response.Header.Get("X-Rinspace-Operation-Status") == "" {
+		return OperationReceipt{}, ErrReceiptNotFound
+	}
 	status := ReceiptStatus(response.Header.Get("X-Rinspace-Operation-Status"))
 	receipt := OperationReceipt{Status: status, HTTPStatus: response.StatusCode}
 	switch status {
