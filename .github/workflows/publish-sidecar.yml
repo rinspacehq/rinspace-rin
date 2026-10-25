@@ -5,7 +5,7 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -13,6 +13,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate immutable release input
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.13'
+          cache: true
+      - name: Verify tagged source
+        run: |
+          nice -n 15 env GOMAXPROCS=1 GOFLAGS='-p=1' go test ./...
+          nice -n 15 env GOMAXPROCS=1 GOFLAGS='-p=1' go vet ./...
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -33,4 +50,36 @@ jobs:
             org.opencontainers.image.source=https://github.com/rinspacehq/rinspace-rin
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=AGPL-3.0-only
-      - run: echo "ghcr.io/rinspacehq/rinspace-rin@${{ steps.image.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build immutable release evidence
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          release_dir="dist"
+          archive="$release_dir/rinspace-rin-${GITHUB_REF_NAME}-source.tar.gz"
+          mkdir -p "$release_dir"
+          git archive --format=tar --prefix="rinspace-rin-${GITHUB_REF_NAME}/" "$GITHUB_SHA" | gzip -n > "$archive"
+          archive_sha="$(sha256sum "$archive" | cut -d' ' -f1)"
+          jq -n \
+            --arg schema_version 'rinspace-rin-release/v1' \
+            --arg tag "$GITHUB_REF_NAME" \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg source_archive "$(basename "$archive")" \
+            --arg source_sha256 "$archive_sha" \
+            --arg image "ghcr.io/rinspacehq/rinspace-rin@${IMAGE_DIGEST}" \
+            '{schema_version:$schema_version,tag:$tag,source_commit:$source_commit,source_archive:$source_archive,source_sha256:$source_sha256,image:$image,sbom:"oci-referrer",provenance:"oci-referrer"}' \
+            > "$release_dir/manifest.json"
+          (cd "$release_dir" && sha256sum "$(basename "$archive")" manifest.json > checksums.txt)
+      - name: Publish GitHub Release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --title "Rin sidecar ${GITHUB_REF_NAME}" \
+            --notes "Immutable source and OCI evidence for ${GITHUB_SHA}. Image: ghcr.io/rinspacehq/rinspace-rin@${IMAGE_DIGEST}"
+          echo "ghcr.io/rinspacehq/rinspace-rin@${IMAGE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
