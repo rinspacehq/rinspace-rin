@@ -35,4 +35,27 @@ reply, err := client.Chat(ctx, rin.ChatInput{
 
 After a timeout, call `OpenAIProvider.ReadReceipt(ctx, operationID)`. It returns the original answer and usage for a completed operation, or a durable `failed`, `unknown`, or `expired` status. A response without the gateway's operation status header is an error; the host must keep that operation unresolved instead of issuing a second model call.
 
+## Agent completion protocol
+
+The sidecar also exposes `POST /v1/agent/completions` for a bounded, non-streaming
+OpenAI-compatible Agent turn. The authenticated host supplies only an operation ID,
+messages, function-tool definitions, and its frozen maximum output tokens. The sidecar
+selects the configured model and provider itself; unknown fields such as a model,
+base URL, API key, or headers are rejected. It returns validated text, function calls,
+finish reason, request ID, model, and prompt/cache/output usage. It never executes a
+tool: project reads, edits, compilation, Git operations, and Push approval stay in the
+browser host.
+
+`GET /v1/agent/operations/{id}` reads the original gateway receipt after a timeout.
+`POST /v1/agent/operations/{id}/abort` creates a terminal tombstone only for an
+unclaimed operation. Unknown transport results remain unresolved and must be queried
+with the same operation ID; neither the sidecar nor its caller may invent a new ID and
+retry a billable model turn.
+
+Agent requests are limited to the fixed Rin model, 96 messages, 32 declared functions,
+64 KiB per message/schema, 1 MiB total request/response, and the configured output-token
+ceiling. Tool-call names, IDs, JSON arguments, result pairing, finish reasons, and usage
+are validated before they cross the protocol boundary. Provider credentials remain in
+the sidecar process and are never accepted from an HTTP request.
+
 License: AGPL-3.0-only, matching Rinspace Web. Rinspace pins the reviewed sidecar image by OCI digest; its private account and wallet service does not import this Go package. Each published image and corresponding source are listed in this repository's releases.

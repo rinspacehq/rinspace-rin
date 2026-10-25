@@ -11,11 +11,16 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      GOMAXPROCS: '1'
+      GOFLAGS: '-p=1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: false
-      - run: go test ./...
-      - run: go vet ./...
+      - run: nice -n 15 go test ./...
+      - run: nice -n 15 go vet ./...
+      - run: nice -n 15 go build ./cmd/rin-sidecar
+      - run: nice -n 15 docker build --tag rinspace-rin:pr-check .

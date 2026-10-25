@@ -26,6 +26,8 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: ghcr.io/rinspacehq/rinspace-rin:${{ github.ref_name }}
           labels: |
             org.opencontainers.image.source=https://github.com/rinspacehq/rinspace-rin
