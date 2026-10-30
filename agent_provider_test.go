@@ -167,6 +167,72 @@ func TestOpenAIProviderAgentResponseBoundAndReceiptRecovery(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderAgentLengthLimitDiscardsPartialToolCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected completion path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"provider-length-1",
+			"model":"deepseek-flash",
+			"choices":[{"message":{"content":"","tool_calls":[{
+				"id":"call-1","type":"function","function":{
+					"name":"apply_project_patch","arguments":"{\"path\":\"main.typ\""
+				}
+			}]},"finish_reason":"length"}],
+			"usage":{"prompt_tokens":3073,"completion_tokens":1024,
+				"prompt_cache_hit_tokens":2304,"prompt_cache_miss_tokens":769}
+		}`))
+	}))
+	defer server.Close()
+	provider := OpenAIProvider{Endpoint: server.URL + "/v1/chat/completions", APIKey: "test-key"}
+
+	request := validAgentFixture("agent-operation-8")
+	request.MaxTokens = 1024
+	result, err := provider.CompleteAgent(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinishReason != "length" || result.Text != agentLengthLimitMessage ||
+		len(result.ToolCalls) != 0 || result.Usage.OutputTokens != 1024 ||
+		result.Usage.CacheHitTokens != 2304 {
+		t.Fatalf("length-limited completion was not normalized safely: %+v", result)
+	}
+}
+
+func TestOpenAIProviderAgentReceiptRecoversLengthLimitWithoutToolExecution(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/rin/operations/length-operation" {
+			t.Fatalf("unexpected receipt path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Rinspace-Operation-Status", string(ReceiptCompleted))
+		_, _ = w.Write([]byte(`{
+			"id":"provider-length-2",
+			"model":"deepseek-flash",
+			"choices":[{"message":{"content":"草稿","tool_calls":[{
+				"id":"call-2","type":"function","function":{
+					"name":"push_git_commits","arguments":"{}"
+				}
+			}]},"finish_reason":"length"}],
+			"usage":{"prompt_tokens":50,"completion_tokens":20,
+				"prompt_cache_hit_tokens":10,"prompt_cache_miss_tokens":40}
+		}`))
+	}))
+	defer server.Close()
+	provider := OpenAIProvider{Endpoint: server.URL + "/v1/chat/completions", APIKey: "test-key"}
+
+	receipt, err := provider.ReadAgentReceipt(context.Background(), "length-operation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Status != ReceiptCompleted || receipt.Completion.Text != agentLengthLimitMessage ||
+		len(receipt.Completion.ToolCalls) != 0 || receipt.Completion.Usage.PromptTokens != 50 {
+		t.Fatalf("length-limited receipt was not recoverable: %+v", receipt)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
