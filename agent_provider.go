@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const agentLengthLimitMessage = "模型输出达到长度上限，未执行工具调用。请缩短任务后重试。"
+
 func (p OpenAIProvider) CompleteAgent(ctx context.Context, input AgentCompletionRequest) (AgentCompletion, error) {
 	if err := ValidateAgentRequest(input); err != nil {
 		return AgentCompletion{}, err
@@ -230,6 +232,15 @@ func parseAgentCompletion(body []byte, request AgentCompletionRequest) (AgentCom
 		Text: result.Choices[0].Message.Content, ToolCalls: result.Choices[0].Message.ToolCalls,
 		FinishReason: result.Choices[0].FinishReason, RequestID: result.ID, Model: model,
 		Usage: AgentUsage{PromptTokens: prompt, CacheHitTokens: hit, CacheMissTokens: miss, OutputTokens: output},
+	}
+	// A provider can stop while serializing function arguments. Never expose a
+	// partially generated call to the host: it is not an instruction that can be
+	// executed safely. Normalize every length-limited completion to a text-only
+	// terminal result while preserving provider identity and exact usage so
+	// receipt recovery can settle billing instead of leaving the project locked.
+	if completion.FinishReason == "length" {
+		completion.Text = agentLengthLimitMessage
+		completion.ToolCalls = nil
 	}
 	validationRequest := request
 	if len(validationRequest.Tools) == 0 {
