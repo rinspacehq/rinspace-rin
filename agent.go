@@ -12,10 +12,12 @@ import (
 const (
 	MaxAgentMessages      = 96
 	MaxAgentTools         = 32
+	MaxAgentOutputTokens  = 393216
 	MaxAgentContentBytes  = 64 << 10
+	MaxAgentReplyBytes    = 4 << 20
 	MaxAgentSchemaBytes   = 64 << 10
-	MaxAgentRequestBytes  = 1 << 20
-	MaxAgentResponseBytes = 1 << 20
+	MaxAgentRequestBytes  = 8 << 20
+	MaxAgentResponseBytes = 8 << 20
 )
 
 type AgentFunctionCall struct {
@@ -79,7 +81,7 @@ type AgentOperationReceipt struct {
 
 func ValidateAgentRequest(input AgentCompletionRequest) error {
 	if !validOperationID(input.OperationID) || input.Model != DefaultModel ||
-		input.MaxTokens < 1 || input.MaxTokens > 4096 ||
+		input.MaxTokens < 1 || input.MaxTokens > MaxAgentOutputTokens ||
 		len(input.Messages) == 0 || len(input.Messages) > MaxAgentMessages ||
 		len(input.Tools) == 0 || len(input.Tools) > MaxAgentTools {
 		return errors.New("rin agent request is invalid")
@@ -160,7 +162,7 @@ func ValidateAgentCompletion(result AgentCompletion, request AgentCompletionRequ
 		(request.MaxTokens > 0 && result.Usage.OutputTokens > int64(request.MaxTokens)) {
 		return errors.New("rin agent completion identity or usage is invalid")
 	}
-	if len(result.Text) > MaxAgentContentBytes || !utf8.ValidString(result.Text) ||
+	if len(result.Text) > MaxAgentReplyBytes || !utf8.ValidString(result.Text) ||
 		len(result.ToolCalls) > MaxAgentTools {
 		return errors.New("rin agent completion content is invalid")
 	}

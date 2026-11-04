@@ -22,6 +22,18 @@ func validAgentFixture(operation string) AgentCompletionRequest {
 	}
 }
 
+func TestValidateAgentRequestProviderOutputCeiling(t *testing.T) {
+	request := validAgentFixture("agent-limit-1")
+	request.MaxTokens = MaxAgentOutputTokens
+	if err := ValidateAgentRequest(request); err != nil {
+		t.Fatalf("provider maximum was rejected: %v", err)
+	}
+	request.MaxTokens++
+	if err := ValidateAgentRequest(request); err == nil {
+		t.Fatal("request above provider maximum was accepted")
+	}
+}
+
 func TestValidateAgentRequestAcceptsBoundedToolHistory(t *testing.T) {
 	request := validAgentFixture("agent-operation-1")
 	request.Messages = append(request.Messages,
@@ -76,6 +88,15 @@ func TestValidateAgentCompletionRequiresDeclaredBoundedResult(t *testing.T) {
 	if err := ValidateAgentCompletion(text, request); err != nil {
 		t.Fatal(err)
 	}
+	request.MaxTokens = MaxAgentOutputTokens
+	text.Text = strings.Repeat("a", 70<<10)
+	text.Usage.OutputTokens = 70 << 10
+	if err := ValidateAgentCompletion(text, request); err != nil {
+		t.Fatalf("reply above the former 64 KiB boundary was rejected: %v", err)
+	}
+	request.MaxTokens = 800
+	text.Text = "Done"
+	text.Usage.OutputTokens = 3
 	tool := AgentCompletion{FinishReason: "tool_calls", RequestID: "request-2", Model: DefaultModel,
 		ToolCalls: []AgentToolCall{{ID: "call-1", Type: "function",
 			Function: AgentFunctionCall{Name: "read_project_files", Arguments: `{"path":"main.tex"}`}}},

@@ -191,6 +191,16 @@ func TestSidecarAgentProtocolFixesProviderAndNeverExecutesTools(t *testing.T) {
 		strings.Contains(body, `"PromptTokens"`) {
 		t.Fatalf("Agent usage is not OpenAI-compatible JSON: %s", body)
 	}
+	input["max_output_tokens"] = rin.MaxAgentOutputTokens
+	if got := sidecarRequest(handler, http.MethodPost, "/v1/agent/completions", input, true); got.Code != http.StatusOK ||
+		fake.agentCalls != 2 || fake.agentRequest.MaxTokens != rin.MaxAgentOutputTokens {
+		t.Fatalf("Agent provider maximum was blocked by the chat default: status=%d calls=%d", got.Code, fake.agentCalls)
+	}
+	input["max_output_tokens"] = rin.MaxAgentOutputTokens + 1
+	if got := sidecarRequest(handler, http.MethodPost, "/v1/agent/completions", input, true); got.Code != http.StatusBadRequest || fake.agentCalls != 2 {
+		t.Fatalf("Agent request above provider maximum was accepted: status=%d calls=%d", got.Code, fake.agentCalls)
+	}
+	input["max_output_tokens"] = 600
 	for _, forbidden := range []string{"model", "base_url", "api_key", "headers"} {
 		changed := make(map[string]any, len(input)+1)
 		for key, value := range input {
@@ -198,7 +208,7 @@ func TestSidecarAgentProtocolFixesProviderAndNeverExecutesTools(t *testing.T) {
 		}
 		changed[forbidden] = "attacker-controlled"
 		got := sidecarRequest(handler, http.MethodPost, "/v1/agent/completions", changed, true)
-		if got.Code != http.StatusBadRequest || fake.agentCalls != 1 {
+		if got.Code != http.StatusBadRequest || fake.agentCalls != 2 {
 			t.Fatalf("forbidden Agent provider field %q reached the gateway: status=%d calls=%d",
 				forbidden, got.Code, fake.agentCalls)
 		}

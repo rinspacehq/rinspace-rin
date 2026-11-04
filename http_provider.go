@@ -29,7 +29,7 @@ func (p OpenAIProvider) Complete(ctx context.Context, input CompletionRequest) (
 	if strings.TrimSpace(p.APIKey) == "" {
 		return Completion{}, errors.New("rin provider key is missing")
 	}
-	if input.Model == "" || input.MaxTokens < 1 || input.MaxTokens > 4096 || len(input.Messages) < 2 {
+	if input.Model == "" || input.MaxTokens < 1 || input.MaxTokens > MaxAgentOutputTokens || len(input.Messages) < 2 {
 		return Completion{}, errors.New("rin completion request is invalid")
 	}
 	if input.OperationID != "" && !validOperationID(input.OperationID) {
