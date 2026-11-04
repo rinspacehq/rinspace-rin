@@ -153,12 +153,12 @@ func (p OpenAIProvider) agentEndpoint() (*url.URL, error) {
 }
 
 func (p OpenAIProvider) agentHTTPClient() *http.Client {
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Minute}
 	if p.Client != nil {
 		clone := *p.Client
 		client = &clone
 		if client.Timeout == 0 {
-			client.Timeout = 120 * time.Second
+			client.Timeout = 15 * time.Minute
 		}
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {

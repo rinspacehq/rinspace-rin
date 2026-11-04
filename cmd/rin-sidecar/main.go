@@ -110,7 +110,7 @@ func (s sidecar) handler() http.Handler {
 		}
 		var frozen rin.CompletionRequest
 		if json.Unmarshal(input.Frozen, &frozen) != nil || frozen.OperationID != "" ||
-			frozen.Model != rin.DefaultModel || frozen.MaxTokens < 1 || frozen.MaxTokens > 4096 || len(frozen.Messages) < 2 {
+			frozen.Model != rin.DefaultModel || frozen.MaxTokens < 1 || frozen.MaxTokens > rin.MaxAgentOutputTokens || len(frozen.Messages) < 2 {
 			problem(w, http.StatusBadRequest, "INVALID_REQUEST")
 			return
 		}
@@ -139,7 +139,7 @@ func (s sidecar) handler() http.Handler {
 			MaxOutputTokens int                       `json:"max_output_tokens"`
 		}
 		if readJSONLimit(w, r, &input, rin.MaxAgentRequestBytes) != nil ||
-			input.MaxOutputTokens > s.maxTokens {
+			input.MaxOutputTokens > rin.MaxAgentOutputTokens {
 			problem(w, http.StatusBadRequest, "INVALID_REQUEST")
 			return
 		}
@@ -268,7 +268,7 @@ func main() {
 	maxTokens := 1200
 	if raw := os.Getenv("RIN_MAX_TOKENS"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > 4096 {
+		if err != nil || parsed < 1 || parsed > rin.MaxAgentOutputTokens {
 			log.Fatal("Rin maximum output tokens is invalid")
 		}
 		maxTokens = parsed
@@ -281,13 +281,13 @@ func main() {
 		parsedEndpoint.User != nil || parsedEndpoint.Fragment != "" || parsedEndpoint.RawQuery != "" || parsedEndpoint.Path != "/v1/chat/completions" {
 		log.Fatal("Rin gateway endpoint must be a chat completions URL without credentials or query")
 	}
-	client := &http.Client{Timeout: 120 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+	client := &http.Client{Timeout: 15 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("gateway redirects are disabled")
 	}}
 	service := sidecar{token: token, provider: rin.OpenAIProvider{Endpoint: endpoint, APIKey: key, Client: client},
 		model: rin.DefaultModel, maxTokens: maxTokens}
 	server := &http.Server{Addr: address, Handler: service.handler(), ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 10 * time.Second, WriteTimeout: 125 * time.Second, IdleTimeout: 60 * time.Second,
+		ReadTimeout: 10 * time.Second, WriteTimeout: 15*time.Minute + 10*time.Second, IdleTimeout: 60 * time.Second,
 		MaxHeaderBytes: 8 << 10}
 	log.Printf("Rin sidecar listening on %s", address)
 	log.Fatal(server.ListenAndServe())

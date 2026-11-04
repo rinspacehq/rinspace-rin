@@ -96,7 +96,7 @@ func (c Client) Chat(ctx context.Context, input ChatInput) (Completion, error) {
 	if maxTokens <= 0 {
 		maxTokens = 1200
 	}
-	if maxTokens > 4096 {
+	if maxTokens > MaxAgentOutputTokens {
 		return Completion{}, errors.New("rin max tokens exceeds limit")
 	}
 	result, err := c.Provider.Complete(ctx, CompletionRequest{

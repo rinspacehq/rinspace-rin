@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -122,7 +123,7 @@ func TestOpenAIProviderAgentResponseBoundAndReceiptRecovery(t *testing.T) {
 				}
 				_, _ = w.Write([]byte(strings.Repeat("x", MaxAgentResponseBytes+1)))
 			} else {
-				w.Header().Set("Content-Length", "1048577")
+				w.Header().Set("Content-Length", strconv.Itoa(MaxAgentResponseBytes+1))
 				_, _ = w.Write([]byte("oversized"))
 			}
 		case "/v1/rin/operations/done":
