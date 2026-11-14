@@ -1,7 +1,7 @@
 FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod ./
-COPY rin.go http_provider.go agent.go agent_provider.go ./
+COPY rin.go http_provider.go agent.go agent_provider.go receipt_content.go ./
 COPY cmd/rin-sidecar ./cmd/rin-sidecar
 RUN GOMAXPROCS=1 CGO_ENABLED=0 go build -p 1 -trimpath -ldflags='-s -w' -o /rin-sidecar ./cmd/rin-sidecar
 
