@@ -21,7 +21,7 @@ func TestOpenAIProviderCarriesAgentToolsWithoutExecutingThem(t *testing.T) {
 		requests++
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" ||
 			r.Header.Get("Authorization") != "Bearer test-key" ||
-			r.Header.Get("X-Rinspace-Operation-Key") != "agent-operation-1" {
+			r.Header.Get("X-Rinspace-Operation-Key") != "agent-operation-1" || r.Header.Get("X-Rinspace-Budget-Profile") != AgentBudgetV2 {
 			t.Errorf("Agent provider request lost its fixed transport contract")
 		}
 		body, _ := io.ReadAll(r.Body)

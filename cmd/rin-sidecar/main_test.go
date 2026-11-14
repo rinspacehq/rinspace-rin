@@ -66,6 +66,45 @@ func (fake *fakeProvider) AbortAgentReceipt(_ context.Context, id string) (rin.A
 	return fake.agentAbortResult, nil
 }
 
+func (fake *fakeProvider) ReadLearningReceipt(ctx context.Context, id string) (rin.AgentOperationReceipt, error) {
+	return fake.ReadAgentReceipt(ctx, id)
+}
+func (fake *fakeProvider) AbortLearningReceipt(ctx context.Context, id string) (rin.AgentOperationReceipt, error) {
+	return fake.AbortAgentReceipt(ctx, id)
+}
+
+func TestSidecarLearningRouteOwnsBudgetAndReceiptRecovery(t *testing.T) {
+	fake := &fakeProvider{agentReadResult: rin.AgentOperationReceipt{Status: rin.ReceiptUnknown}, agentAbortResult: rin.AgentOperationReceipt{Status: rin.ReceiptExpired}}
+	handler := (sidecar{token: strings.Repeat("s", 32), model: rin.DefaultModel, provider: fake}).handler()
+	messages := []rin.AgentMessage{{Role: "system", Content: "Use supplied document tools."}, {Role: "user", Content: strings.Repeat("x", 80000)}}
+	for len(messages) < 100 {
+		messages = append(messages, rin.AgentMessage{Role: "user", Content: "Original followup."})
+	}
+	input := map[string]any{"operation_id": "learning-1", "messages": messages, "max_output_tokens": 32768, "tools": []rin.AgentToolDefinition{{Type: "function", Function: rin.AgentFunctionDefinition{Name: "read_project_files", Description: "Read one bounded file", Parameters: json.RawMessage(`{"type":"object","properties":{}}`)}}}}
+	if got := sidecarRequest(handler, http.MethodPost, "/v1/learning/completions", input, false); got.Code != http.StatusUnauthorized || fake.agentCalls != 0 {
+		t.Fatal("learning route bypassed service authentication")
+	}
+	if got := sidecarRequest(handler, http.MethodPost, "/v1/agent/completions", input, true); got.Code != http.StatusBadRequest || fake.agentCalls != 0 {
+		t.Fatal("ordinary route accepted learning limits")
+	}
+	if got := sidecarRequest(handler, http.MethodPost, "/v1/learning/completions", input, true); got.Code != http.StatusOK || fake.agentCalls != 1 || fake.agentRequest.BudgetProfile != rin.ReaderLearningBudgetV1 {
+		t.Fatalf("learning request lost fixed profile: %d %s", got.Code, got.Body.String())
+	}
+	input["budget_profile"] = "browser-selected"
+	if got := sidecarRequest(handler, http.MethodPost, "/v1/learning/completions", input, true); got.Code != http.StatusBadRequest || fake.agentCalls != 1 {
+		t.Fatal("caller replaced service-owned budget")
+	}
+	if got := sidecarRequest(handler, http.MethodGet, "/v1/learning/operations/learning-1", nil, true); got.Code != http.StatusAccepted || fake.agentReadID != "learning-1" {
+		t.Fatal("learning receipt lost original operation")
+	}
+	if got := sidecarRequest(handler, http.MethodPost, "/v1/learning/operations/learning-1/abort", nil, true); got.Code != http.StatusGone || fake.agentAbortID != "learning-1" {
+		t.Fatal("learning abort failed to return original tombstone")
+	}
+	if fake.agentCalls != 1 {
+		t.Fatal("receipt recovery repeated completion")
+	}
+}
+
 func sidecarRequest(handler http.Handler, method, path string, body any, authorized bool) *httptest.ResponseRecorder {
 	var payload []byte
 	if body != nil {

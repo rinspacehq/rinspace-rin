@@ -20,6 +20,20 @@ const (
 	MaxAgentResponseBytes = 8 << 20
 )
 
+const AgentBudgetV2 = "rin-agent/v2"
+const ReaderLearningBudgetV1 = "reader-learning/v1"
+
+func agentBudget(profile string) (messages, content, output int, err error) {
+	switch profile {
+	case "", AgentBudgetV2:
+		return MaxAgentMessages, MaxAgentContentBytes, MaxAgentOutputTokens, nil
+	case ReaderLearningBudgetV1:
+		return 256, 1 << 20, 65536, nil
+	default:
+		return 0, 0, 0, errors.New("rin agent budget profile is invalid")
+	}
+}
+
 type AgentFunctionCall struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -50,11 +64,14 @@ type AgentToolDefinition struct {
 }
 
 type AgentCompletionRequest struct {
-	OperationID string                `json:"operation_id,omitempty"`
-	Model       string                `json:"model"`
-	Messages    []AgentMessage        `json:"messages"`
-	Tools       []AgentToolDefinition `json:"tools"`
-	MaxTokens   int                   `json:"max_tokens"`
+	// Selected by an authenticated service route, never an untrusted browser
+	// field. The upstream idempotency hash binds the corresponding profile.
+	BudgetProfile string                `json:"-"`
+	OperationID   string                `json:"operation_id,omitempty"`
+	Model         string                `json:"model"`
+	Messages      []AgentMessage        `json:"messages"`
+	Tools         []AgentToolDefinition `json:"tools"`
+	MaxTokens     int                   `json:"max_tokens"`
 }
 
 type AgentCompletion struct {
@@ -80,9 +97,10 @@ type AgentOperationReceipt struct {
 }
 
 func ValidateAgentRequest(input AgentCompletionRequest) error {
+	messages, content, output, err := agentBudget(input.BudgetProfile)
 	if !validOperationID(input.OperationID) || input.Model != DefaultModel ||
-		input.MaxTokens < 1 || input.MaxTokens > MaxAgentOutputTokens ||
-		len(input.Messages) == 0 || len(input.Messages) > MaxAgentMessages ||
+		err != nil || input.MaxTokens < 1 || input.MaxTokens > output ||
+		len(input.Messages) == 0 || len(input.Messages) > messages ||
 		len(input.Tools) == 0 || len(input.Tools) > MaxAgentTools {
 		return errors.New("rin agent request is invalid")
 	}
@@ -105,7 +123,7 @@ func ValidateAgentRequest(input AgentCompletionRequest) error {
 	pending := make(map[string]struct{})
 	seenCallIDs := make(map[string]struct{})
 	for index, message := range input.Messages {
-		if len(message.Content) > MaxAgentContentBytes || !utf8.ValidString(message.Content) {
+		if len(message.Content) > content || !utf8.ValidString(message.Content) {
 			return errors.New("rin agent message content is invalid")
 		}
 		totalBytes += len(message.Role) + len(message.Content) + len(message.ToolCallID)
@@ -126,7 +144,7 @@ func ValidateAgentRequest(input AgentCompletionRequest) error {
 				return errors.New("rin agent assistant message is invalid")
 			}
 			for _, call := range message.ToolCalls {
-				if err := validateAgentToolCall(call, toolNames, seenCallIDs); err != nil {
+				if err := validateAgentToolCall(call, toolNames, seenCallIDs, content); err != nil {
 					return err
 				}
 				pending[call.ID] = struct{}{}
@@ -157,8 +175,9 @@ func ValidateAgentRequest(input AgentCompletionRequest) error {
 }
 
 func ValidateAgentCompletion(result AgentCompletion, request AgentCompletionRequest) error {
+	_, content, maximum, err := agentBudget(request.BudgetProfile)
 	if result.RequestID == "" || len(result.RequestID) > 256 ||
-		result.Model != request.Model || !validAgentUsage(result.Usage) ||
+		err != nil || result.Model != request.Model || !validAgentUsage(result.Usage) || result.Usage.OutputTokens > int64(maximum) ||
 		(request.MaxTokens > 0 && result.Usage.OutputTokens > int64(request.MaxTokens)) {
 		return errors.New("rin agent completion identity or usage is invalid")
 	}
@@ -177,7 +196,7 @@ func ValidateAgentCompletion(result AgentCompletion, request AgentCompletionRequ
 		}
 	}
 	for _, call := range result.ToolCalls {
-		if err := validateAgentToolCall(call, toolNames, seen); err != nil {
+		if err := validateAgentToolCall(call, toolNames, seen, content); err != nil {
 			return err
 		}
 	}
@@ -200,10 +219,10 @@ func ValidateAgentCompletion(result AgentCompletion, request AgentCompletionRequ
 	return nil
 }
 
-func validateAgentToolCall(call AgentToolCall, tools, seen map[string]struct{}) error {
+func validateAgentToolCall(call AgentToolCall, tools, seen map[string]struct{}, maxArguments int) error {
 	if !validAgentCallID(call.ID) || call.Type != "function" ||
 		!validAgentName(call.Function.Name) || len(call.Function.Arguments) == 0 ||
-		len(call.Function.Arguments) > MaxAgentSchemaBytes ||
+		len(call.Function.Arguments) > maxArguments ||
 		!validJSONObject([]byte(call.Function.Arguments)) {
 		return errors.New("rin agent tool call is invalid")
 	}

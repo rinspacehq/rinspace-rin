@@ -128,35 +128,10 @@ func (s sidecar) handler() http.Handler {
 		reply(w, http.StatusOK, completion)
 	})
 	mux.HandleFunc("POST /v1/agent/completions", func(w http.ResponseWriter, r *http.Request) {
-		if !s.authorized(r) {
-			problem(w, http.StatusUnauthorized, "UNAUTHENTICATED")
-			return
-		}
-		var input struct {
-			OperationID     string                    `json:"operation_id"`
-			Messages        []rin.AgentMessage        `json:"messages"`
-			Tools           []rin.AgentToolDefinition `json:"tools"`
-			MaxOutputTokens int                       `json:"max_output_tokens"`
-		}
-		if readJSONLimit(w, r, &input, rin.MaxAgentRequestBytes) != nil ||
-			input.MaxOutputTokens > rin.MaxAgentOutputTokens {
-			problem(w, http.StatusBadRequest, "INVALID_REQUEST")
-			return
-		}
-		request := rin.AgentCompletionRequest{
-			OperationID: input.OperationID, Model: s.model, Messages: input.Messages,
-			Tools: input.Tools, MaxTokens: input.MaxOutputTokens,
-		}
-		if rin.ValidateAgentRequest(request) != nil {
-			problem(w, http.StatusBadRequest, "INVALID_REQUEST")
-			return
-		}
-		completion, err := s.provider.CompleteAgent(r.Context(), request)
-		if err != nil || rin.ValidateAgentCompletion(completion, request) != nil {
-			problem(w, http.StatusBadGateway, "GATEWAY_UNAVAILABLE")
-			return
-		}
-		reply(w, http.StatusOK, completion)
+		s.agentCompletion(w, r, "")
+	})
+	mux.HandleFunc("POST /v1/learning/completions", func(w http.ResponseWriter, r *http.Request) {
+		s.agentCompletion(w, r, rin.ReaderLearningBudgetV1)
 	})
 	mux.HandleFunc("GET /v1/operations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s.receipt(w, r, false)
@@ -170,10 +145,79 @@ func (s sidecar) handler() http.Handler {
 	mux.HandleFunc("POST /v1/agent/operations/{id}/abort", func(w http.ResponseWriter, r *http.Request) {
 		s.agentReceipt(w, r, true)
 	})
+	mux.HandleFunc("GET /v1/learning/operations/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.agentReceiptWithBudget(w, r, false, rin.ReaderLearningBudgetV1)
+	})
+	mux.HandleFunc("POST /v1/learning/operations/{id}/abort", func(w http.ResponseWriter, r *http.Request) {
+		s.agentReceiptWithBudget(w, r, true, rin.ReaderLearningBudgetV1)
+	})
+	mux.HandleFunc("DELETE /v1/learning/operations/{id}/content", s.purgeLearningReceipt)
 	return mux
 }
 
+func (s sidecar) purgeLearningReceipt(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		problem(w, http.StatusUnauthorized, "UNAUTHENTICATED")
+		return
+	}
+	if r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.RawQuery != "" {
+		problem(w, http.StatusBadRequest, "INVALID_REQUEST")
+		return
+	}
+	cleanup, ok := s.provider.(interface {
+		PurgeLearningReceipt(context.Context, string) error
+	})
+	if !ok {
+		problem(w, http.StatusServiceUnavailable, "GATEWAY_UNAVAILABLE")
+		return
+	}
+	err := cleanup.PurgeLearningReceipt(r.Context(), r.PathValue("id"))
+	switch {
+	case errors.Is(err, rin.ErrReceiptPending):
+		problem(w, http.StatusConflict, "RECEIPT_PENDING")
+	case errors.Is(err, rin.ErrReceiptNotFound):
+		problem(w, http.StatusNotFound, "NOT_FOUND")
+	case err != nil:
+		problem(w, http.StatusBadGateway, "GATEWAY_UNAVAILABLE")
+	default:
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (s sidecar) agentCompletion(w http.ResponseWriter, r *http.Request, profile string) {
+	if !s.authorized(r) {
+		problem(w, http.StatusUnauthorized, "UNAUTHENTICATED")
+		return
+	}
+	var input struct {
+		OperationID     string                    `json:"operation_id"`
+		Messages        []rin.AgentMessage        `json:"messages"`
+		Tools           []rin.AgentToolDefinition `json:"tools"`
+		MaxOutputTokens int                       `json:"max_output_tokens"`
+	}
+	if readJSONLimit(w, r, &input, rin.MaxAgentRequestBytes) != nil {
+		problem(w, http.StatusBadRequest, "INVALID_REQUEST")
+		return
+	}
+	request := rin.AgentCompletionRequest{OperationID: input.OperationID, Model: s.model, Messages: input.Messages, Tools: input.Tools, MaxTokens: input.MaxOutputTokens, BudgetProfile: profile}
+	if rin.ValidateAgentRequest(request) != nil {
+		problem(w, http.StatusBadRequest, "INVALID_REQUEST")
+		return
+	}
+	completion, err := s.provider.CompleteAgent(r.Context(), request)
+	if err != nil || rin.ValidateAgentCompletion(completion, request) != nil {
+		problem(w, http.StatusBadGateway, "GATEWAY_UNAVAILABLE")
+		return
+	}
+	reply(w, http.StatusOK, completion)
+}
+
 func (s sidecar) agentReceipt(w http.ResponseWriter, r *http.Request, abort bool) {
+	s.agentReceiptWithBudget(w, r, abort, "")
+}
+
+func (s sidecar) agentReceiptWithBudget(w http.ResponseWriter, r *http.Request, abort bool, profile string) {
 	if !s.authorized(r) {
 		problem(w, http.StatusUnauthorized, "UNAUTHENTICATED")
 		return
@@ -185,7 +229,21 @@ func (s sidecar) agentReceipt(w http.ResponseWriter, r *http.Request, abort bool
 	id := r.PathValue("id")
 	var result rin.AgentOperationReceipt
 	var err error
-	if abort {
+	if profile == rin.ReaderLearningBudgetV1 {
+		provider, ok := s.provider.(interface {
+			ReadLearningReceipt(context.Context, string) (rin.AgentOperationReceipt, error)
+			AbortLearningReceipt(context.Context, string) (rin.AgentOperationReceipt, error)
+		})
+		if !ok {
+			problem(w, http.StatusServiceUnavailable, "GATEWAY_UNAVAILABLE")
+			return
+		}
+		if abort {
+			result, err = provider.AbortLearningReceipt(r.Context(), id)
+		} else {
+			result, err = provider.ReadLearningReceipt(r.Context(), id)
+		}
+	} else if abort {
 		result, err = s.provider.AbortAgentReceipt(r.Context(), id)
 	} else {
 		result, err = s.provider.ReadAgentReceipt(r.Context(), id)

@@ -55,6 +55,11 @@ func (p OpenAIProvider) CompleteAgent(ctx context.Context, input AgentCompletion
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Rinspace-Operation-Key", input.OperationID)
+	profile := input.BudgetProfile
+	if profile == "" {
+		profile = AgentBudgetV2
+	}
+	request.Header.Set("X-Rinspace-Budget-Profile", profile)
 	response, err := p.agentHTTPClient().Do(request)
 	if err != nil {
 		return AgentCompletion{}, err
@@ -71,14 +76,22 @@ func (p OpenAIProvider) CompleteAgent(ctx context.Context, input AgentCompletion
 }
 
 func (p OpenAIProvider) ReadAgentReceipt(ctx context.Context, operationID string) (AgentOperationReceipt, error) {
-	return p.readAgentReceipt(ctx, operationID, false)
+	return p.readAgentReceipt(ctx, operationID, false, "")
 }
 
 func (p OpenAIProvider) AbortAgentReceipt(ctx context.Context, operationID string) (AgentOperationReceipt, error) {
-	return p.readAgentReceipt(ctx, operationID, true)
+	return p.readAgentReceipt(ctx, operationID, true, "")
 }
 
-func (p OpenAIProvider) readAgentReceipt(ctx context.Context, operationID string, abort bool) (AgentOperationReceipt, error) {
+func (p OpenAIProvider) ReadLearningReceipt(ctx context.Context, operationID string) (AgentOperationReceipt, error) {
+	return p.readAgentReceipt(ctx, operationID, false, ReaderLearningBudgetV1)
+}
+
+func (p OpenAIProvider) AbortLearningReceipt(ctx context.Context, operationID string) (AgentOperationReceipt, error) {
+	return p.readAgentReceipt(ctx, operationID, true, ReaderLearningBudgetV1)
+}
+
+func (p OpenAIProvider) readAgentReceipt(ctx context.Context, operationID string, abort bool, profile string) (AgentOperationReceipt, error) {
 	if !validOperationID(operationID) {
 		return AgentOperationReceipt{}, errors.New("rin operation ID is invalid")
 	}
@@ -127,7 +140,7 @@ func (p OpenAIProvider) readAgentReceipt(ctx context.Context, operationID string
 			if err != nil {
 				return AgentOperationReceipt{}, err
 			}
-			completion, err := parseAgentCompletion(body, AgentCompletionRequest{Model: DefaultModel})
+			completion, err := parseAgentCompletion(body, AgentCompletionRequest{Model: DefaultModel, BudgetProfile: profile})
 			if err != nil {
 				return AgentOperationReceipt{}, err
 			}
