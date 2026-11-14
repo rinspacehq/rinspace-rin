@@ -53,9 +53,32 @@ with the same operation ID; neither the sidecar nor its caller may invent a new 
 retry a billable model turn.
 
 Agent requests are limited to the fixed Rin model, 96 messages, 32 declared functions,
-64 KiB per message/schema, 1 MiB total request/response, and the configured output-token
-ceiling. Tool-call names, IDs, JSON arguments, result pairing, finish reasons, and usage
+64 KiB per message/schema, and the configured output-token ceiling. The sidecar
+accepts an 8 MiB envelope; the matching `rin-agent/v2` gateway profile retains its
+1 MiB request boundary and stores responses up to 4 MiB. Tool-call names, IDs,
+JSON arguments, result pairing, finish reasons, and usage
 are validated before they cross the protocol boundary. Provider credentials remain in
 the sidecar process and are never accepted from an HTTP request.
+
+### Learning transport budget
+
+`POST /v1/learning/completions` accepts the same request fields, fixes the internal
+budget to `reader-learning/v1`, and permits 256 messages, 1 MiB per message/tool
+argument, an 8 MiB request, and at most 65536 output tokens. Function schemas remain
+limited to 64 KiB and 32 functions. The host owns account admission, the actual
+lower budget, private teaching data, and any tools. This endpoint adds no Agent
+executor or user role.
+
+`GET /v1/learning/operations/{id}` and
+`POST /v1/learning/operations/{id}/abort` recover the same operation with the
+learning output validator. They never dispatch another completion. Browser
+clients cannot select the model, credentials, endpoint, headers or budget profile.
+
+The provider sends `X-Rinspace-Budget-Profile` to the matching new-api receipt
+gateway: `rin-agent/v2` for ordinary Agent calls, `reader-learning/v1` for learning.
+The gateway binds this profile into the operation digest; changing it with the
+same operation key is a conflict. Deploy compatible immutable gateway/sidecar
+versions together. These source capabilities do not activate host policy or
+change any existing account's budget.
 
 License: AGPL-3.0-only, matching Rinspace Web. Rinspace pins the reviewed sidecar image by OCI digest; its private account and wallet service does not import this Go package. Each published image and corresponding source are listed in this repository's releases.

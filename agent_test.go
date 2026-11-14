@@ -34,6 +34,52 @@ func TestValidateAgentRequestProviderOutputCeiling(t *testing.T) {
 	}
 }
 
+func TestLearningBudgetRetainsOrdinaryAgentLimits(t *testing.T) {
+	request := validAgentFixture("learning-1")
+	request.MaxTokens = 32768
+	request.Messages[1].Content = strings.Repeat("x", 80000)
+	for len(request.Messages) < 100 {
+		request.Messages = append(request.Messages, AgentMessage{Role: "user", Content: "Original followup."})
+	}
+	if err := ValidateAgentRequest(request); err == nil {
+		t.Fatal("ordinary Agent received learning context limits")
+	}
+	request.BudgetProfile = ReaderLearningBudgetV1
+	if err := ValidateAgentRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	result := AgentCompletion{RequestID: "synthetic-1", Model: DefaultModel, FinishReason: "tool_calls", ToolCalls: []AgentToolCall{{ID: "present-1", Type: "function", Function: AgentFunctionCall{Name: "read_project_files", Arguments: `{"text":"` + strings.Repeat("a", 80000) + `"}`}}}, Usage: AgentUsage{PromptTokens: 1000, CacheMissTokens: 1000, OutputTokens: 200}}
+	if err := ValidateAgentCompletion(result, request); err != nil {
+		t.Fatalf("complete structured teaching output was truncated: %v", err)
+	}
+	ordinary := request
+	ordinary.BudgetProfile = ""
+	if err := ValidateAgentCompletion(result, ordinary); err == nil {
+		t.Fatal("learning output widened ordinary tool arguments")
+	}
+	for _, scenario := range []string{"output", "messages", "content", "unknown-profile"} {
+		t.Run(scenario, func(t *testing.T) {
+			changed := request
+			changed.Messages = append([]AgentMessage{}, request.Messages...)
+			switch scenario {
+			case "output":
+				changed.MaxTokens = 65537
+			case "messages":
+				for len(changed.Messages) < 257 {
+					changed.Messages = append(changed.Messages, AgentMessage{Role: "user", Content: "bounded"})
+				}
+			case "content":
+				changed.Messages[1].Content = strings.Repeat("x", (1<<20)+1)
+			case "unknown-profile":
+				changed.BudgetProfile = "browser-selected"
+			}
+			if err := ValidateAgentRequest(changed); err == nil {
+				t.Fatal("invalid learning budget accepted")
+			}
+		})
+	}
+}
+
 func TestValidateAgentRequestAcceptsBoundedToolHistory(t *testing.T) {
 	request := validAgentFixture("agent-operation-1")
 	request.Messages = append(request.Messages,
