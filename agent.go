@@ -75,12 +75,13 @@ type AgentCompletionRequest struct {
 }
 
 type AgentCompletion struct {
-	Text         string          `json:"text,omitempty"`
-	ToolCalls    []AgentToolCall `json:"tool_calls,omitempty"`
-	FinishReason string          `json:"finish_reason"`
-	RequestID    string          `json:"request_id"`
-	Model        string          `json:"model"`
-	Usage        AgentUsage      `json:"usage"`
+	Text          string          `json:"text,omitempty"`
+	ToolCalls     []AgentToolCall `json:"tool_calls,omitempty"`
+	FinishReason  string          `json:"finish_reason"`
+	RequestID     string          `json:"request_id"`
+	Model         string          `json:"model"`
+	Usage         AgentUsage      `json:"usage"`
+	OutputInvalid bool            `json:"output_invalid,omitempty"`
 }
 
 type AgentUsage struct {
@@ -180,6 +181,15 @@ func ValidateAgentCompletion(result AgentCompletion, request AgentCompletionRequ
 		err != nil || result.Model != request.Model || !validAgentUsage(result.Usage) || result.Usage.OutputTokens > int64(maximum) ||
 		(request.MaxTokens > 0 && result.Usage.OutputTokens > int64(request.MaxTokens)) {
 		return errors.New("rin agent completion identity or usage is invalid")
+	}
+	if result.OutputInvalid {
+		if request.BudgetProfile == ReaderLearningBudgetV1 && result.Text == "" && len(result.ToolCalls) == 0 {
+			switch result.FinishReason {
+			case "stop", "tool_calls", "length":
+				return nil
+			}
+		}
+		return errors.New("rin agent output rejection is invalid")
 	}
 	if len(result.Text) > MaxAgentReplyBytes || !utf8.ValidString(result.Text) ||
 		len(result.ToolCalls) > MaxAgentTools {
