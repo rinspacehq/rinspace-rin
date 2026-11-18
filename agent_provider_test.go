@@ -234,6 +234,48 @@ func TestOpenAIProviderAgentReceiptRecoversLengthLimitWithoutToolExecution(t *te
 	}
 }
 
+func TestOpenAIProviderReaderInvalidToolOutputRetainsCompletedUsage(t *testing.T) {
+	const reply = `{
+		"id":"reader-original-request",
+		"model":"deepseek-flash",
+		"choices":[{"message":{"content":"","tool_calls":[{
+			"id":"call-reader-1","type":"function","function":{
+				"name":"present_lesson","arguments":"{\"steps\":["
+			}
+		}]},"finish_reason":"tool_calls"}],
+		"usage":{"prompt_tokens":4038,"completion_tokens":1344,
+			"prompt_cache_hit_tokens":2560,"prompt_cache_miss_tokens":1478}
+	}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("X-Rinspace-Operation-Status", string(ReceiptCompleted))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, reply)
+	}))
+	defer server.Close()
+
+	provider := OpenAIProvider{Endpoint: server.URL + "/v1/chat/completions", APIKey: "test-key"}
+	request := validAgentFixture("learning-1")
+	request.BudgetProfile = ReaderLearningBudgetV1
+	request.MaxTokens = 4096
+	request.Tools[0].Function.Name = "present_lesson"
+	result, err := provider.CompleteAgent(context.Background(), request)
+	if err != nil || !result.OutputInvalid || result.FinishReason != "tool_calls" || result.RequestID != "reader-original-request" ||
+		result.Text != "" || len(result.ToolCalls) != 0 ||
+		result.Usage != (AgentUsage{PromptTokens: 4038, CacheHitTokens: 2560, CacheMissTokens: 1478, OutputTokens: 1344}) {
+		t.Fatalf("invalid Reader output did not preserve its completed usage: result=%+v err=%v", result, err)
+	}
+	receipt, err := provider.ReadLearningReceipt(context.Background(), request.OperationID)
+	if err != nil || receipt.Status != ReceiptCompleted || !receipt.Completion.OutputInvalid ||
+		receipt.Completion.RequestID != result.RequestID || receipt.Completion.Usage != result.Usage || len(receipt.Completion.ToolCalls) != 0 {
+		t.Fatalf("receipt recovery lost the original rejection or usage: receipt=%+v err=%v", receipt, err)
+	}
+	if _, err := provider.ReadAgentReceipt(context.Background(), request.OperationID); err == nil {
+		t.Fatal("invalid tool output passed the ordinary Agent validator")
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

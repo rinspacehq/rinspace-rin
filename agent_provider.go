@@ -264,6 +264,17 @@ func parseAgentCompletion(body []byte, request AgentCompletionRequest) (AgentCom
 		}
 	}
 	if err := ValidateAgentCompletion(completion, validationRequest); err != nil {
+		if request.BudgetProfile == ReaderLearningBudgetV1 {
+			// Account for the original completed request without exposing
+			// invalid tool arguments to the Reader or dispatching it again.
+			rejected := AgentCompletion{
+				FinishReason: completion.FinishReason, RequestID: completion.RequestID,
+				Model: completion.Model, Usage: completion.Usage, OutputInvalid: true,
+			}
+			if ValidateAgentCompletion(rejected, validationRequest) == nil {
+				return rejected, nil
+			}
+		}
 		return AgentCompletion{}, err
 	}
 	return completion, nil
